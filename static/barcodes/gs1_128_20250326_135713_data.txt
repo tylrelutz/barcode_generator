@@ -1,0 +1,7 @@
+01
+module_height=15.0
+module_width=0.26
+quiet_zone=6.5
+font_size=10
+text_distance=5.0
+center_text=True
