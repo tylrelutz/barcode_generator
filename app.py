@@ -15,7 +15,6 @@ app.config['UPLOAD_FOLDER'] = os.getenv('UPLOAD_FOLDER', 'static/barcodes')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev')
 
 # GS1-128 Constants
-FNC1 = chr(202)  # Function 1 symbol for GS1-128
 FIXED_LENGTH_AIS = {
     '00': 18,  # SSCC
     '01': 14,  # GTIN
@@ -48,14 +47,15 @@ BARCODES_DIR.mkdir(parents=True, exist_ok=True)
 def format_gs1_data(data):
     """
     Format data according to GS1-128 specifications:
-    1. Add FNC1 at the start
-    2. Add FNC1 between variable length fields
-    3. Validate AI lengths
+    1. Start with Code128 C start character
+    2. Add FNC1 in first position
+    3. Add AI data
+    4. Add FNC1 between variable length fields
     """
     if not data.startswith('('):
         return data  # Return as is if it's not using AI format
         
-    formatted_data = FNC1  # Start with FNC1
+    formatted_data = ""
     current_pos = 0
     
     while current_pos < len(data):
@@ -73,8 +73,8 @@ def format_gs1_data(data):
         if not ai.isdigit():
             raise ValueError(f"Invalid AI: {ai}")
             
-        # Add the AI with parentheses
-        formatted_data += data[current_pos:ai_end + 1]
+        # Add the AI without parentheses
+        formatted_data += ai
         
         # Find the start of the next AI or end of string
         next_ai_pos = data.find('(', ai_end + 1)
@@ -92,10 +92,6 @@ def format_gs1_data(data):
         
         # Add the value
         formatted_data += value
-        
-        # If this is a variable length AI and not the last field, add FNC1
-        if ai not in FIXED_LENGTH_AIS and next_ai_pos < len(data):
-            formatted_data += FNC1
             
         current_pos = next_ai_pos
     
@@ -117,7 +113,8 @@ def generate_gs1_barcode(data):
     
     # Create the barcode writer (always use PNG for preview)
     writer = ImageWriter()
-    code128 = Code128(formatted_data, writer=writer)
+    # Use Code128 with special formatting for GS1-128
+    code128 = Code128(formatted_data, writer=writer, options={'no_quotes': True})
     
     # Get options from form with defaults
     options = {
