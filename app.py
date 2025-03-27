@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, send_file, url_for, make_response
+from flask import Flask, render_template, request, send_file, url_for, make_response, redirect
 from barcode import Code128
 from barcode.writer import ImageWriter, SVGWriter
 from datetime import datetime
@@ -14,33 +14,110 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 app.config['UPLOAD_FOLDER'] = os.getenv('UPLOAD_FOLDER', 'static/barcodes')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev')
 
+# GS1-128 Constants
+FNC1 = chr(202)  # Function 1 symbol for GS1-128
+FIXED_LENGTH_AIS = {
+    '00': 18,  # SSCC
+    '01': 14,  # GTIN
+    '02': 14,  # GTIN of contained trade items
+    '03': 14,  # GTIN of contained trade items
+    '04': 16,  # GTIN
+    '11': 6,   # Production date (YYMMDD)
+    '12': 6,   # Due date (YYMMDD)
+    '13': 6,   # Packaging date (YYMMDD)
+    '14': 6,   # Best before date (YYMMDD)
+    '15': 6,   # Best before date (YYMMDD)
+    '16': 6,   # Sell by date (YYMMDD)
+    '17': 6,   # Expiration date (YYMMDD)
+    '18': 6,   # Production date (YYMMDD)
+    '19': 6,   # Production date (YYMMDD)
+    '20': 2,   # Product variant
+    '31': 6,   # Net weight (kg)
+    '32': 6,   # Net weight (kg)
+    '33': 6,   # Net weight (kg)
+    '34': 6,   # Net weight (kg)
+    '35': 6,   # Net weight (kg)
+    '36': 6,   # Net weight (kg)
+    '41': 6    # Customer's purchase order number
+}
+
 # Ensure the barcodes directory exists
 BARCODES_DIR = Path(app.config['UPLOAD_FOLDER'])
 BARCODES_DIR.mkdir(parents=True, exist_ok=True)
 
-# Clean up old files periodically (keep last 100 files)
-def cleanup_old_files():
-    try:
-        files = sorted(BARCODES_DIR.glob('*.*'), key=os.path.getctime, reverse=True)
-        for f in files[100:]:  # Keep only the 100 most recent files
-            try:
-                f.unlink()
-            except:
-                pass
-    except:
-        pass
+def format_gs1_data(data):
+    """
+    Format data according to GS1-128 specifications:
+    1. Add FNC1 at the start
+    2. Add FNC1 between variable length fields
+    3. Validate AI lengths
+    """
+    if not data.startswith('('):
+        return data  # Return as is if it's not using AI format
+        
+    formatted_data = FNC1  # Start with FNC1
+    current_pos = 0
+    
+    while current_pos < len(data):
+        if data[current_pos] != '(':
+            current_pos += 1
+            continue
+            
+        # Extract AI
+        ai_start = current_pos + 1
+        ai_end = data.find(')', ai_start)
+        if ai_end == -1:
+            raise ValueError("Invalid AI format: missing closing parenthesis")
+            
+        ai = data[ai_start:ai_end]
+        if not ai.isdigit():
+            raise ValueError(f"Invalid AI: {ai}")
+            
+        # Add the AI with parentheses
+        formatted_data += data[current_pos:ai_end + 1]
+        
+        # Find the start of the next AI or end of string
+        next_ai_pos = data.find('(', ai_end + 1)
+        if next_ai_pos == -1:
+            next_ai_pos = len(data)
+            
+        # Get the value for this AI
+        value = data[ai_end + 1:next_ai_pos]
+        
+        # Validate fixed-length AIs
+        if ai in FIXED_LENGTH_AIS:
+            expected_length = FIXED_LENGTH_AIS[ai]
+            if len(value) != expected_length:
+                raise ValueError(f"AI {ai} requires exactly {expected_length} characters")
+        
+        # Add the value
+        formatted_data += value
+        
+        # If this is a variable length AI and not the last field, add FNC1
+        if ai not in FIXED_LENGTH_AIS and next_ai_pos < len(data):
+            formatted_data += FNC1
+            
+        current_pos = next_ai_pos
+    
+    return formatted_data
 
 def generate_gs1_barcode(data):
     """
     Generate a GS1-128 barcode from the provided data
     """
+    try:
+        # Format data according to GS1-128 specifications
+        formatted_data = format_gs1_data(data)
+    except ValueError as e:
+        raise ValueError(f"GS1-128 format error: {str(e)}")
+    
     # Generate filename with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"gs1_128_{timestamp}"
     
     # Create the barcode writer (always use PNG for preview)
     writer = ImageWriter()
-    code128 = Code128(data, writer=writer)
+    code128 = Code128(formatted_data, writer=writer)
     
     # Get options from form with defaults
     options = {
@@ -59,7 +136,7 @@ def generate_gs1_barcode(data):
     # Also save the data for other formats
     data_file = os.path.join(BARCODES_DIR, f"{filename}_data.txt")
     with open(data_file, 'w') as f:
-        f.write(data)
+        f.write(formatted_data)
     
     return filename
 
